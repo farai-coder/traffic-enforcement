@@ -138,6 +138,14 @@ python gui.py         # Tkinter desktop UI
 
 **Controls**: `R`/`Y`/`G` set light state, `SPACE` pauses, `T` resets tracking, `S` screenshots, `Q` quits.
 
+> **ANPR is automatic.** Plate capture is triggered by a detected violation,
+> not by any keypress. When YOLOv8 flags a vehicle for `red_light`, `stop_line`,
+> or `lane_change`, the pipeline crops the offending vehicle, runs the plate
+> detector, and OCRs it with TrOCR — the result is cached per `track_id` so
+> the same vehicle is never read twice. The plate number lands in the CSV
+> next to the violation. `S` is a manual *screenshot* of the whole frame
+> (debug aid) — it does **not** trigger ANPR.
+
 ---
 
 ## Smoke tests
