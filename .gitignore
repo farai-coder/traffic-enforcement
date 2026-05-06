@@ -1,0 +1,13 @@
+.claude/
+__pycache__/
+*.pyc
+
+# Virtualenvs
+.venv/
+venv/
+
+# Model weights (auto-downloaded by ultralytics / huggingface)
+*.pt
+
+# Per-machine output (violation evidence, CSVs, screenshots)
+data/
