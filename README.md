@@ -148,14 +148,123 @@ python gui.py         # Tkinter desktop UI
 
 ---
 
-## Smoke tests
+## Usage — running the system end-to-end
+
+After setup, here's the path from "deps installed" to "watching it catch a violation".
+
+### 1. Activate the venv (every new terminal session)
 
 ```powershell
-python test_traffic_light.py   # verify light detection
-python test_anpr.py            # verify plate reading
+cd traffic-enforcement
+.\.venv\Scripts\Activate.ps1
 ```
 
-`test_anpr.py <image.jpg>` runs ANPR on a single image; with no args it opens the webcam and waits for SPACE to capture.
+Prompt should show `(.venv)`. If activation is blocked: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+### 2. Point the camera
+
+Open `config.py` and pick one:
+
+- **Phone (IP Webcam app)** → `CAMERA_SOURCE = "http://192.168.1.x:8080/video"` (the IP your phone shows)
+- **Built-in webcam** → `CAMERA_SOURCE = 0`
+- **Pre-recorded video** → `CAMERA_SOURCE = "data/test.mp4"`
+
+Phone and PC must share the same Wi-Fi. Confirm with `ping 192.168.1.x`.
+
+### 3. Verify camera + light detection
+
+```powershell
+python test_traffic_light.py
+```
+
+A window opens showing the live feed with the detected light state in the corner. Press `Q` to quit. If the window doesn't appear, the camera URL is wrong.
+
+### 4. Calibrate the geometry
+
+The stop line, lane lines, and traffic-light ROI need to match where things appear in **your** camera frame.
+
+```powershell
+python calibrate.py
+```
+
+Click in the window to set the points. The values get written back to `config.py`. Re-run any time you reposition the camera.
+
+### 5. Verify ANPR works on a still photo
+
+Take a phone photo of a plate, save it as `test_plate.jpg` in the project folder, then:
+
+```powershell
+python test_anpr.py test_plate.jpg
+```
+
+Expect a cropped plate window and `[RESULT] Plate text: XXX1234` in the console. First run is slow (TrOCR weights loading); subsequent reads are fast.
+
+With no argument, `python test_anpr.py` opens the webcam and waits for SPACE to capture a frame to OCR.
+
+### 6. Run the full system
+
+```powershell
+python main.py        # OpenCV terminal UI
+# or
+python gui.py         # Tkinter desktop UI
+```
+
+A window opens showing the live feed with overlays:
+
+- **Green box** → vehicle detected, no violation
+- **Red box** → violating vehicle
+- **Yellow line** → lane boundary
+- **Red line** → stop line
+- **`PLATE: XXX1234`** appears above the violator's box once OCR completes
+
+### 7. Drive the simulation
+
+You're in manual light mode, so you control the light from the keyboard:
+
+| Key | Action |
+|---|---|
+| `R` | Set light to RED |
+| `Y` | Set light to YELLOW |
+| `G` | Set light to GREEN |
+| `T` | Reset all tracking + plate cache |
+| `S` | Save a debug screenshot of the current frame |
+| `SPACE` | Pause / resume |
+| `Q` | Quit |
+
+**Trigger a red-light violation**: press `R`, then drive a toy car (or wave a real one) across the stop line. Within ~1 second you should see:
+
+- The vehicle's box flip to red
+- Console: `[ANPR] Vehicle #N -> plate: ...` then `[VIOLATION] RED_LIGHT | Vehicle #N | Plate: ...`
+- A new row in `data/violations/violations.csv`
+- A JPG in `data/violations/red_light_N_<timestamp>.jpg`
+
+**Trigger a lane-change violation**: light state doesn't matter — drive a vehicle across one of the yellow lane lines.
+
+### 8. Check what got logged
+
+```powershell
+ii data\violations\violations.csv
+```
+
+(`ii` = `Invoke-Item`, opens it in the default app.) Rows look like:
+
+```
+2026-05-06 14:23:11, red_light, 7, AEG4521, 0.87, data/violations/red_light_7_20260506_142311.jpg
+```
+
+Each row pairs with its evidence JPG in the same folder.
+
+### 9. When done
+
+Press `Q` to quit. The console prints `[DONE] Total violations logged: N`. The venv stays active until you `deactivate` or close the terminal.
+
+### Common runtime gotchas
+
+1. **Black/empty window** → wrong `CAMERA_SOURCE` or the phone isn't streaming.
+2. **No vehicles detected** → confidence too high. Lower `CONFIDENCE_THRESHOLD = 0.3` in `config.py`.
+3. **Vehicle detected but no violation** → stop line / lane lines aren't where you think; re-run `calibrate.py`.
+4. **`[ANPR] -> plate unreadable`** → plate is too small, blurry, or angled; move the camera closer or improve lighting.
+5. **ANPR slow** → first run only; weights are loading. After that it's <1 s per plate on CPU.
 
 ---
 
