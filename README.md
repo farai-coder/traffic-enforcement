@@ -189,4 +189,4 @@ traffic-enforcement/
 - **`SerialException` on COM port** → close Arduino IDE / other apps holding the port, or change `SERIAL_PORT`
 - **TrOCR / EasyOCR slow first run** → models are downloading; subsequent runs are fast
 - **CUDA not used** → `python -c "import torch; print(torch.cuda.is_available())"` should print `True`
-- **`gui.py` crashes on launch with `TypeError`** → known: `gui.py` calls `TrafficLightDetector(manual_mode=True)` but the constructor takes `mode="manual"`. Patch: change that one line.
+- **CUDA available but model still slow** → first OCR on each plate is slow because TrOCR loads weights into VRAM; subsequent reads are fast.

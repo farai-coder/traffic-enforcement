@@ -44,7 +44,7 @@ class TrafficEnforcementGUI:
 
         # Initialize modules
         self.camera = Camera()
-        self.light_detector = TrafficLightDetector(manual_mode=True)
+        self.light_detector = TrafficLightDetector(mode="manual")
         self.light_detector.set_state("green")
         self.violation_detector = ViolationDetector()
         self.plate_detector = PlateDetector()
