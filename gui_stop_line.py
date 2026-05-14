@@ -86,12 +86,15 @@ class StopLineGUI:
         self.main_capture_lock = threading.Lock()
 
         camera_url = settings.camera_source(self.settings)
-        print(f"[INFO] Starting phone capture thread on {camera_url}...", flush=True)
+        print(f"[INFO] Starting phone capture thread on {camera_url} "
+              f"(opening in background)...", flush=True)
         self.main_capture = FrameCaptureThread(camera_url, name="phone")
-        if not self.main_capture.start():
-            print(f"[WARN] Cannot open {camera_url} at startup — "
-                  f"GUI will still launch; use Reconnect when phone is ready.",
-                  flush=True)
+        threading.Thread(
+            target=self._open_main_capture_async,
+            args=(camera_url,),
+            daemon=True,
+            name="phone-opener",
+        ).start()
 
         if config.ANPR_CAMERA_SOURCE == config.CAMERA_SOURCE:
             print("[INFO] ANPR camera = main camera; reusing frames", flush=True)
@@ -104,8 +107,11 @@ class StopLineGUI:
                 api_pref=cv2.CAP_DSHOW, warmup=10,
             )
             if not self.anpr_capture.start():
-                self.main_capture.stop()
-                raise RuntimeError("Cannot open ANPR camera source")
+                print(f"[WARN] Cannot open ANPR camera source "
+                      f"{config.ANPR_CAMERA_SOURCE} — ANPR will fall back to "
+                      f"the main capture frame for plate reads.",
+                      flush=True)
+                self.anpr_capture = None
 
         print("[INFO] Loading YOLO + ANPR + OCR (this may take ~10s)...", flush=True)
         self.model = YOLO(config.YOLO_MODEL)
@@ -526,6 +532,16 @@ class StopLineGUI:
             self._reset()
         elif k == "q":
             self._on_close()
+
+    def _open_main_capture_async(self, camera_url):
+        """Open the phone capture in the background so __init__ doesn't block
+        on FFmpeg's long open-timeout when the phone is unreachable."""
+        ok = self.main_capture.start()
+        if ok:
+            print(f"[INFO] Phone capture connected on {camera_url}", flush=True)
+        else:
+            print(f"[WARN] Cannot open {camera_url} — use Reconnect when "
+                  f"phone is ready.", flush=True)
 
     def _reconnect_serial(self):
         """Apply COM port / baud from the entries: close existing serial,

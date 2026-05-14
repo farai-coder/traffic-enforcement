@@ -14,7 +14,7 @@ _DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(_DIR, "settings.json")
 
 DEFAULTS = {
-    "phone_ip": "192.168.60.218",
+    "phone_ip": "192.168.60.208",
     "phone_port": 8080,
     "phone_path": "/video",
     "serial_port": "COM5",
