@@ -1,18 +1,23 @@
 """
 Configuration for the Traffic Enforcement System.
 Adjust these values to match your camera setup and intersection layout.
+
+Camera URL is now sourced from settings.json (editable from the GUI).
 """
 
+import settings as _settings
+
 # --- Camera Settings ---
-CAMERA_SOURCE = "http://192.168.1.109:8080/video"  # Phone camera (IP Webcam app)
+CAMERA_SOURCE = _settings.camera_source()  # Phone camera (IP Webcam app)
 ANPR_CAMERA_SOURCE = 0  # Laptop webcam for plate reading
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
 # --- YOLOv8 Settings ---
-YOLO_MODEL = "yolov8n.pt"  # nano model for speed; use yolov8s.pt or yolov8m.pt for accuracy
+YOLO_MODEL = "yolov8n.pt"  # nano model for speed
 VEHICLE_CLASSES = [2, 3, 5, 7]  # COCO classes: car, motorcycle, bus, truck
-CONFIDENCE_THRESHOLD = 0.3
+CONFIDENCE_THRESHOLD = 0.15
+FRAME_SKIP = 1  # 1 = run YOLO on every new frame the capture thread delivers
 
 # --- Traffic Light Detection (HSV ranges) ---
 # Define the Region of Interest where the traffic light is in the frame
@@ -46,9 +51,9 @@ LANE_LINES = [[(3, 269), (278, 353)], [(45, 221), (276, 281)], [(93, 179), (273,
 # Number of frames a vehicle must be tracked crossing a lane boundary to trigger violation
 LANE_CHANGE_FRAMES = 5
 
-# --- ESP32 Serial Settings ---
-SERIAL_PORT = "COM5"  # ESP32 (Silicon Labs CP210x)
-SERIAL_BAUD = 9600
+# --- ESP32 Serial Settings (sourced from settings.json, editable from GUI) ---
+SERIAL_PORT = _settings.load().get("serial_port", "COM5")
+SERIAL_BAUD = int(_settings.load().get("serial_baud", 9600))
 
 # --- ANPR Settings ---
 ANPR_MODEL = "yolov8n.pt"  # Model for plate detection (will be replaced with plate-specific model)
@@ -58,3 +63,8 @@ OCR_LANGUAGES = ["en"]
 # --- Violation Logging ---
 VIOLATIONS_DIR = "data/violations"
 VIOLATIONS_CSV = "data/violations/violations.csv"
+
+# --- Violation API ---
+VIOLATIONS_API_URL = "http://localhost:8001/api/violations"  # POST endpoint, set to None to disable
+VIOLATIONS_API_TOKEN = None  # Bearer token, or None for no auth
+VIOLATIONS_API_TIMEOUT = 5  # seconds

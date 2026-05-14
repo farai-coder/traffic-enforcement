@@ -53,7 +53,7 @@ def test_image(path):
 def test_webcam():
     """Live webcam test - draws detected plates in real-time."""
     import config
-    cap = cv2.VideoCapture(config.CAMERA_SOURCE)
+    cap = cv2.VideoCapture(config.ANPR_CAMERA_SOURCE)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 

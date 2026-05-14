@@ -62,8 +62,8 @@ def main():
     camera = Camera()
     camera.start()
 
-    print("[INIT] Traffic light in manual mode (R/G/Y keys)...")
-    light_detector = TrafficLightDetector(mode="manual")
+    print("[INIT] Traffic light in serial mode (ESP32 over COM5)...")
+    light_detector = TrafficLightDetector(mode="serial")
 
     print("[INIT] Loading YOLOv8 vehicle detector...")
     violation_detector = ViolationDetector()

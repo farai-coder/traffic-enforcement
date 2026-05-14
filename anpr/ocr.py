@@ -9,9 +9,9 @@ class PlateOCR:
     """Extracts text from a license plate image using Microsoft TrOCR (printed text)."""
 
     def __init__(self):
-        print("[OCR] Loading microsoft/trocr-small-printed model...")
-        self.processor = TrOCRProcessor.from_pretrained("microsoft/trocr-small-printed")
-        self.model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-small-printed")
+        print("[OCR] Loading microsoft/trocr-base-printed model...")
+        self.processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-printed")
+        self.model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-printed")
         print("[OCR] Model loaded.")
 
     def read_plate(self, plate_image):

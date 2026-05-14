@@ -73,22 +73,23 @@ class ViolationDetector:
                 self.tracked_vehicles[track_id] = {"positions": [], "violated": set()}
 
             tracker = self.tracked_vehicles[track_id]
-            tracker["positions"].append((cx, cy))
+            tracker["positions"].append((cx, cy, front_y))
             if len(tracker["positions"]) > 30:
                 tracker["positions"] = tracker["positions"][-30:]
 
             # --- Red Light + Stop Line Violation ---
-            if light_state == "red" and len(tracker["positions"]) >= 2:
-                prev = tracker["positions"][-2]
-                curr = (cx, cy)
+            # Triggers as soon as the vehicle's bbox intersects the stop line.
+            if light_state == "red":
                 crossed = False
                 if self.stop_line_points:
-                    crossed = _crossed_line(
-                        prev, curr,
-                        tuple(self.stop_line_points[0]), tuple(self.stop_line_points[1])
+                    rect = (x1, y1, x2 - x1, y2 - y1)
+                    crossed, _, _ = cv2.clipLine(
+                        rect,
+                        tuple(self.stop_line_points[0]),
+                        tuple(self.stop_line_points[1]),
                     )
                 else:
-                    crossed = prev[1] < self.stop_line_y <= cy
+                    crossed = y1 <= self.stop_line_y <= y2
 
                 if crossed:
                     if "red_light" not in tracker["violated"]:
@@ -109,8 +110,8 @@ class ViolationDetector:
             # --- Illegal Lane Change ---
             if len(tracker["positions"]) >= config.LANE_CHANGE_FRAMES:
                 recent = tracker["positions"][-config.LANE_CHANGE_FRAMES:]
-                start_pos = recent[0]
-                end_pos = recent[-1]
+                start_pos = (recent[0][0], recent[0][1])
+                end_pos = (recent[-1][0], recent[-1][1])
 
                 # Check diagonal lane lines first
                 for lane_line in self.lane_lines:
