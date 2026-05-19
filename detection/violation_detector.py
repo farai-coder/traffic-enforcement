@@ -77,12 +77,7 @@ class ViolationDetector:
             if len(tracker["positions"]) > 30:
                 tracker["positions"] = tracker["positions"][-30:]
 
-            # No violations are emitted while the light is green — keep tracking
-            # positions so lane-change history stays accurate across state changes.
-            if light_state == "green":
-                continue
-
-            # --- Red Light + Stop Line Violation ---
+            # --- Red Light + Stop Line Violation (red only) ---
             # Triggers as soon as the vehicle's bbox intersects the stop line.
             if light_state == "red":
                 crossed = False
