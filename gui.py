@@ -22,6 +22,7 @@ from PIL import Image, ImageTk
 from datetime import datetime
 
 from capture.camera import Camera
+from capture.video_buffer import VideoBuffer
 from detection.traffic_state import TrafficLightDetector
 from detection.violation_detector import ViolationDetector
 from anpr.plate_detector import PlateDetector
@@ -44,6 +45,7 @@ class TrafficEnforcementGUI:
 
         # Initialize modules
         self.camera = Camera()
+        self.video_buffer = VideoBuffer(pre_seconds=1.5, post_seconds=1.5)
         self.light_detector = TrafficLightDetector(mode="manual")
         self.light_detector.set_state("green")
         self.violation_detector = ViolationDetector()
@@ -229,6 +231,9 @@ class TrafficEnforcementGUI:
             if frame is None:
                 continue
 
+            saved_clip = self.video_buffer.add(frame)
+            if saved_clip:
+                print(f"[VIDEO] Saved {saved_clip}")
             self.frame_count += 1
 
             # Step 1: Detect traffic light state
@@ -253,7 +258,7 @@ class TrafficEnforcementGUI:
                         if plate_image is not None:
                             plate_text = self.plate_ocr.read_plate(plate_image)
 
-                    self.logger.log(
+                    image_path = self.logger.log(
                         violation_type=v["type"],
                         track_id=v["track_id"],
                         plate_number=plate_text,
@@ -261,12 +266,17 @@ class TrafficEnforcementGUI:
                         frame=frame,
                     )
 
+                    if image_path:
+                        video_path = image_path.rsplit(".", 1)[0] + ".mp4"
+                        if self.video_buffer.trigger(video_path):
+                            print(f"[VIDEO] Recording post-roll → {video_path}")
+
                     # Update GUI from main thread
                     self.root.after(0, self._add_violation, v["type"], v["track_id"], plate_text)
 
             # Step 4: Draw annotations
             frame = self.light_detector.draw(frame)
-            frame = self.violation_detector.draw(frame, detections, violations)
+            frame = self.violation_detector.draw(frame, detections, violations, light_state)
 
             # Draw light state indicator on frame
             light_colors = {"red": (0, 0, 255), "yellow": (0, 255, 255),

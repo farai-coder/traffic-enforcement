@@ -77,7 +77,7 @@ class ViolationDetector:
             if len(tracker["positions"]) > 30:
                 tracker["positions"] = tracker["positions"][-30:]
 
-            # --- Red Light + Stop Line Violation ---
+            # --- Red Light + Stop Line Violation (red only) ---
             # Triggers as soon as the vehicle's bbox intersects the stop line.
             if light_state == "red":
                 crossed = False
@@ -142,16 +142,20 @@ class ViolationDetector:
 
         return violations
 
-    def draw(self, frame, detections, violations):
+    def draw(self, frame, detections, violations, light_state=None):
         """Draw bounding boxes, stop line, lane lines, and violation labels."""
         h, w = frame.shape[:2]
 
-        # Draw stop line (only if configured)
+        # Draw stop line (only if configured) — bright red when enforced, dim when not.
         if self.stop_line_points:
+            enforced = light_state == "red"
+            color = (0, 0, 255) if enforced else (90, 90, 90)
+            thickness = 3 if enforced else 1
             cv2.line(frame, tuple(self.stop_line_points[0]), tuple(self.stop_line_points[1]),
-                     (0, 0, 255), 3)
-            cv2.putText(frame, "STOP LINE", (self.stop_line_points[0][0], self.stop_line_points[0][1] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                     color, thickness)
+            if enforced:
+                cv2.putText(frame, "STOP LINE", (self.stop_line_points[0][0], self.stop_line_points[0][1] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # Draw diagonal lane lines
         for lane_line in self.lane_lines:

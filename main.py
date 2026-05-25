@@ -18,6 +18,7 @@ Controls:
 import cv2
 import config
 from capture.camera import Camera
+from capture.video_buffer import VideoBuffer
 from detection.traffic_state import TrafficLightDetector
 from detection.violation_detector import ViolationDetector
 from violations.logger import ViolationLogger
@@ -62,6 +63,8 @@ def main():
     camera = Camera()
     camera.start()
 
+    video_buffer = VideoBuffer(pre_seconds=1.5, post_seconds=1.5)
+
     print("[INIT] Traffic light in serial mode (ESP32 over COM5)...")
     light_detector = TrafficLightDetector(mode="serial")
 
@@ -96,6 +99,9 @@ def main():
                     print("[WARN] Dropped frame, retrying...", flush=True)
                     continue
 
+                saved_clip = video_buffer.add(frame)
+                if saved_clip:
+                    print(f"[VIDEO] Saved {saved_clip}", flush=True)
                 frame_count += 1
 
                 light_state = light_detector.detect(frame)
@@ -133,7 +139,7 @@ def main():
                     print(f"[VIOLATION] {v['type'].upper()} | Vehicle #{track_id} | "
                           f"Plate: {plate_number}", flush=True)
 
-                    logger.log(
+                    image_path = logger.log(
                         violation_type=v["type"],
                         track_id=track_id,
                         plate_number=plate_number,
@@ -141,9 +147,14 @@ def main():
                         frame=frame,
                     )
 
+                    if image_path:
+                        video_path = image_path.rsplit(".", 1)[0] + ".mp4"
+                        if video_buffer.trigger(video_path):
+                            print(f"[VIDEO] Recording post-roll → {video_path}", flush=True)
+
                 # Draw annotations
                 frame = light_detector.draw(frame)
-                frame = violation_detector.draw(frame, detections, violations)
+                frame = violation_detector.draw(frame, detections, violations, light_state)
 
                 # Overlay plate numbers on violating vehicles
                 violation_ids = {v["track_id"] for v in violations}
