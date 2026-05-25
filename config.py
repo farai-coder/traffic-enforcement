@@ -9,7 +9,7 @@ import settings as _settings
 
 # --- Camera Settings ---
 CAMERA_SOURCE = _settings.camera_source()  # Phone camera (IP Webcam app)
-ANPR_CAMERA_SOURCE = 0  # Laptop webcam for plate reading
+ANPR_CAMERA_SOURCE = 1  # Laptop webcam for plate reading
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
@@ -66,5 +66,5 @@ VIOLATIONS_CSV = "data/violations/violations.csv"
 
 # --- Violation API ---
 VIOLATIONS_API_URL = "http://localhost:8001/api/violations"  # POST endpoint, set to None to disable
-VIOLATIONS_API_TOKEN = None  # Bearer token, or None for no auth
+VIOLATIONS_API_TOKEN = "4fc06642eaa3d24b8188de4a3f74027f04eda821ad5f0956b9d0d487a627724e"  # Bearer token, or None for no auth
 VIOLATIONS_API_TIMEOUT = 5  # seconds
