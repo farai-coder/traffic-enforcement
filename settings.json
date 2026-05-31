@@ -3,5 +3,6 @@
   "phone_port": 8080,
   "phone_path": "/video",
   "serial_port": "COM5",
-  "serial_baud": 9600
+  "serial_baud": 9600,
+  "camera_source": "0"
 }

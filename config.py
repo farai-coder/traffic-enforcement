@@ -8,19 +8,29 @@ Camera URL is now sourced from settings.json (editable from the GUI).
 import settings as _settings
 
 # --- Camera Settings ---
-CAMERA_SOURCE = _settings.camera_source()  # Phone camera (IP Webcam app)
+# Effective source: a saved webcam index/URL (settings.json camera_source) or,
+# if none is set, the phone IP stream. Each machine remembers its own camera.
+CAMERA_SOURCE = _settings.effective_camera_source()
 ANPR_CAMERA_SOURCE = 1  # Laptop webcam for plate reading
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
+
+
+def default_rotation_for(source):
+    """Webcams are upright (no rotation); the phone IP stream is mounted
+    sideways and needs a 90° clockwise rotation."""
+    if isinstance(source, int) or (isinstance(source, str) and source.isdigit()):
+        return None
+    return "cw"
+
 
 # --- Frame Orientation ---
 # Rotation applied to every captured frame BEFORE detection/calibration, so the
 # calibrated zones and the detector always see the same orientation.
 # Options: None (no rotation), "cw" (90° clockwise), "ccw" (90° counter-clockwise), "180".
-# The phone camera is mounted sideways and needs "cw"; an upright laptop webcam
-# needs None. The webcam launchers (run_webcam.py / run_calibrate_webcam.py)
-# override this to None.
-CAMERA_ROTATION = "cw"
+# Derived from the camera source: webcam index -> None, phone URL -> "cw".
+# The GUI camera selector updates this when you switch sources.
+CAMERA_ROTATION = default_rotation_for(CAMERA_SOURCE)
 TARGET_FRAME_HEIGHT = 500  # every frame is resized to this height (width scaled to match)
 
 # --- YOLOv8 Settings ---

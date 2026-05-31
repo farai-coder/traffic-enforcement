@@ -22,6 +22,7 @@ import time
 from PIL import Image, ImageTk
 from datetime import datetime
 
+import config
 from capture.camera import Camera
 from capture.video_buffer import VideoBuffer
 from detection.traffic_state import TrafficLightDetector
@@ -265,7 +266,14 @@ class TrafficEnforcementGUI:
         if not source:
             self.cam_status.config(text="Enter a camera index (0,1) or stream URL.", fg="#f9e2af")
             return
+        # Keep rotation consistent with the source (webcam upright, phone sideways).
+        config.CAMERA_ROTATION = config.default_rotation_for(source)
         ok, msg = self.camera.set_source(source)
+        if ok:
+            # Persist so this machine remembers its camera (no more phone-IP default).
+            import settings
+            settings.set_camera_source(source)
+            msg += "  (saved)"
         self.cam_status.config(text=msg, fg="#a6e3a1" if ok else "#f38ba8")
         print(f"[CAMERA] {msg}")
 

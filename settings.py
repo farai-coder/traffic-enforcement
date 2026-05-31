@@ -19,6 +19,10 @@ DEFAULTS = {
     "phone_path": "/video",
     "serial_port": "COM5",
     "serial_baud": 9600,
+    # Camera source: "" = use the phone IP stream above; otherwise a webcam
+    # index ("0", "1") or a full stream URL. Persisted per machine so each PC
+    # remembers its own camera instead of always defaulting to the phone IP.
+    "camera_source": "",
 }
 
 _lock = threading.Lock()
@@ -42,9 +46,36 @@ def save(data: dict) -> None:
             json.dump(merged, f, indent=2)
 
 
-def camera_source(s: dict | None = None) -> str:
+def phone_url(s: dict | None = None) -> str:
+    """Build the phone IP-webcam stream URL from settings."""
     s = s or load()
     path = s.get("phone_path", "/video")
     if not path.startswith("/"):
         path = "/" + path
     return f"http://{s['phone_ip']}:{s['phone_port']}{path}"
+
+
+def effective_camera_source(s: dict | None = None):
+    """The camera the app should actually use.
+
+    Returns the saved 'camera_source' (a webcam index as int, or a URL string)
+    if set; otherwise falls back to the phone IP stream. This is what lets each
+    machine remember its own camera instead of always using the phone IP.
+    """
+    s = s or load()
+    src = s.get("camera_source", "")
+    if src not in (None, ""):
+        return int(src) if str(src).isdigit() else src
+    return phone_url(s)
+
+
+def set_camera_source(src) -> None:
+    """Persist the chosen camera source (called by the GUI selector)."""
+    data = load()
+    data["camera_source"] = "" if src is None else str(src)
+    save(data)
+
+
+def camera_source(s: dict | None = None) -> str:
+    """Backwards-compatible alias kept for older callers (phone URL)."""
+    return phone_url(s)
