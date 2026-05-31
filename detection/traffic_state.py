@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import threading
+import time
 import config
 
 
@@ -18,6 +19,7 @@ class TrafficLightDetector:
         self.current_state = "unknown"
         self.mode = mode
         self.manual_mode = mode == "manual"
+        self.port = config.SERIAL_PORT
         self._serial_conn = None
         self._serial_thread = None
 
@@ -25,22 +27,49 @@ class TrafficLightDetector:
             self._start_serial()
 
     def _start_serial(self):
-        """Start a background thread to read light state from ESP32."""
+        """Open the serial port and start the reader thread. Returns True on success."""
         import serial
         try:
-            self._serial_conn = serial.Serial(
-                config.SERIAL_PORT, config.SERIAL_BAUD, timeout=1
-            )
-            self._serial_thread = threading.Thread(
-                target=self._serial_reader, daemon=True
-            )
-            self._serial_thread.start()
-            print(f"[SERIAL] Connected to ESP32 on {config.SERIAL_PORT}")
+            self._serial_conn = serial.Serial(self.port, config.SERIAL_BAUD, timeout=1)
+            if self._serial_thread is None or not self._serial_thread.is_alive():
+                self._serial_thread = threading.Thread(target=self._serial_reader, daemon=True)
+                self._serial_thread.start()
+            print(f"[SERIAL] Connected to ESP32 on {self.port}")
+            return True
         except Exception as e:
-            print(f"[SERIAL] Failed to connect to {config.SERIAL_PORT}: {e}")
+            print(f"[SERIAL] Failed to connect to {self.port}: {e}")
             print("[SERIAL] Falling back to manual mode. Press R/Y/G to set state.")
             self.mode = "manual"
             self.manual_mode = True
+            return False
+
+    def set_serial_port(self, port):
+        """Switch to a new serial port at runtime (from the GUI selector).
+
+        Returns (ok: bool, message: str).
+        """
+        try:
+            if self._serial_conn:
+                self._serial_conn.close()
+        except Exception:
+            pass
+        self._serial_conn = None
+        self.port = port
+        self.mode = "serial"
+        self.manual_mode = False
+        ok = self._start_serial()
+        if ok:
+            return True, f"Connected to ESP32 on {port}"
+        return False, f"Could not open {port}"
+
+    @staticmethod
+    def list_ports():
+        """Return available serial port device names (e.g. ['COM5', 'COM1'])."""
+        try:
+            import serial.tools.list_ports as lp
+            return [p.device for p in lp.comports()]
+        except Exception:
+            return []
 
     def _serial_reader(self):
         """Background thread: continuously reads STATE:xxx from ESP32."""
@@ -52,8 +81,10 @@ class TrafficLightDetector:
                         state = line.split(":", 1)[1].lower()
                         if state in ("red", "yellow", "green"):
                             self.current_state = state
+                else:
+                    time.sleep(0.01)
             except Exception:
-                pass
+                time.sleep(0.05)
 
     def set_state(self, state):
         """Manually set the traffic light state."""

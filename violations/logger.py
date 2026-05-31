@@ -1,5 +1,6 @@
 import os
 import csv
+import threading
 import cv2
 from datetime import datetime
 import config
@@ -21,7 +22,8 @@ class ViolationLogger:
                     "plate_number", "confidence", "image_path"
                 ])
 
-    def log(self, violation_type, track_id, plate_number, confidence, frame):
+    def log(self, violation_type, track_id, plate_number, confidence, frame,
+            light_state="unknown"):
         """Log a violation and save the evidence frame.
 
         Args:
@@ -30,6 +32,7 @@ class ViolationLogger:
             plate_number: extracted plate text (or 'UNKNOWN')
             confidence: detection confidence score
             frame: the full video frame as evidence
+            light_state: traffic light state at the time ('red'/'yellow'/'green')
         """
         timestamp = datetime.now()
         timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
@@ -57,4 +60,34 @@ class ViolationLogger:
         print(f"[VIOLATION] {timestamp_str} | {violation_type.upper()} | "
               f"Vehicle #{track_id} | Plate: {plate_number or 'UNKNOWN'}")
 
+        # Send to the violations API (best-effort, off the main thread so a slow
+        # or down endpoint never stalls the video loop).
+        self._post_to_api(violation_type, plate_number, track_id, confidence,
+                          light_state, frame.copy())
+
         return image_path
+
+    def _post_to_api(self, violation_type, plate_number, track_id, confidence,
+                     light_state, frame):
+        if not getattr(config, "VIOLATIONS_API_URL", None):
+            return
+
+        def _send():
+            try:
+                import api_client
+                ok, resp = api_client.post_violation(
+                    violation_type=violation_type,
+                    plate_number=plate_number,
+                    track_id=track_id,
+                    confidence=confidence,
+                    light_state=light_state,
+                    image_bgr=frame,
+                )
+                if ok:
+                    print(f"[API] Sent {violation_type} #{track_id} to receiver.", flush=True)
+                else:
+                    print(f"[API] Send failed for #{track_id}: {resp}", flush=True)
+            except Exception as e:
+                print(f"[API] Send error for #{track_id}: {e}", flush=True)
+
+        threading.Thread(target=_send, daemon=True).start()

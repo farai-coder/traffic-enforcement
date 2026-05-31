@@ -145,6 +145,7 @@ def main():
                         plate_number=plate_number,
                         confidence=confidence,
                         frame=frame,
+                        light_state=light_state,
                     )
 
                     if image_path:

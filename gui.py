@@ -16,6 +16,7 @@ Controls:
 import tkinter as tk
 from tkinter import ttk
 import cv2
+import numpy as np
 import threading
 import time
 from PIL import Image, ImageTk
@@ -115,6 +116,60 @@ class TrafficEnforcementGUI:
                                     command=lambda: self._set_light("green"))
         self.btn_green.pack(side=tk.LEFT, padx=5)
 
+        # -- Serial Port (ESP32 traffic light) --
+        serial_frame = tk.LabelFrame(right_frame, text=" SERIAL PORT (ESP32) ",
+                                      font=("Consolas", 11, "bold"),
+                                      fg="#cdd6f4", bg="#1e1e2e",
+                                      labelanchor="n", bd=2, relief="groove")
+        serial_frame.pack(fill=tk.X, pady=(0, 10))
+
+        row = tk.Frame(serial_frame, bg="#1e1e2e")
+        row.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        self.port_var = tk.StringVar(value=self.light_detector.port)
+        self.port_combo = ttk.Combobox(row, textvariable=self.port_var,
+                                        values=self.light_detector.list_ports(),
+                                        width=10, font=("Consolas", 10))
+        self.port_combo.pack(side=tk.LEFT, padx=(0, 5))
+
+        tk.Button(row, text="↻", font=("Consolas", 10, "bold"),
+                  bg="#585b70", fg="white", bd=0, width=2,
+                  command=self._refresh_ports).pack(side=tk.LEFT, padx=2)
+        tk.Button(row, text="Connect", font=("Consolas", 10, "bold"),
+                  bg="#89b4fa", fg="#1e1e2e", bd=0, width=8,
+                  command=self._connect_port).pack(side=tk.LEFT, padx=2)
+
+        self.serial_status = tk.Label(serial_frame, text="", font=("Consolas", 9),
+                                      fg="#bac2de", bg="#1e1e2e", wraplength=360,
+                                      justify="left")
+        self.serial_status.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self._set_serial_status()
+
+        # -- Camera Source --
+        cam_frame = tk.LabelFrame(right_frame, text=" CAMERA SOURCE ",
+                                   font=("Consolas", 11, "bold"),
+                                   fg="#cdd6f4", bg="#1e1e2e",
+                                   labelanchor="n", bd=2, relief="groove")
+        cam_frame.pack(fill=tk.X, pady=(0, 10))
+
+        crow = tk.Frame(cam_frame, bg="#1e1e2e")
+        crow.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        self.cam_var = tk.StringVar(value=str(self.camera.source))
+        self.cam_combo = ttk.Combobox(crow, textvariable=self.cam_var,
+                                      values=["0", "1", "2"], width=14,
+                                      font=("Consolas", 10))
+        self.cam_combo.pack(side=tk.LEFT, padx=(0, 5))
+
+        tk.Button(crow, text="Connect", font=("Consolas", 10, "bold"),
+                  bg="#89b4fa", fg="#1e1e2e", bd=0, width=8,
+                  command=self._connect_camera).pack(side=tk.LEFT, padx=2)
+
+        self.cam_status = tk.Label(cam_frame, text="", font=("Consolas", 9),
+                                   fg="#bac2de", bg="#1e1e2e", wraplength=360,
+                                   justify="left")
+        self.cam_status.pack(fill=tk.X, padx=8, pady=(0, 8))
+
         # -- Stats --
         stats_frame = tk.LabelFrame(right_frame, text=" STATUS ",
                                      font=("Consolas", 11, "bold"),
@@ -181,6 +236,55 @@ class TrafficEnforcementGUI:
                   bg="#f38ba8", fg="white", bd=0, width=15,
                   command=self._on_close).pack(side=tk.RIGHT, padx=5)
 
+    def _refresh_ports(self):
+        ports = self.light_detector.list_ports()
+        self.port_combo["values"] = ports
+        if ports and self.port_var.get() not in ports:
+            self.port_var.set(ports[0])
+        print(f"[SERIAL] Available ports: {ports or 'none found'}")
+
+    def _connect_port(self):
+        port = self.port_var.get().strip()
+        if not port:
+            self.serial_status.config(text="Enter or select a port (e.g. COM5).", fg="#f9e2af")
+            return
+        ok, msg = self.light_detector.set_serial_port(port)
+        self.serial_status.config(text=msg, fg="#a6e3a1" if ok else "#f38ba8")
+        print(f"[SERIAL] {msg}")
+
+    def _set_serial_status(self):
+        connected = self.light_detector._serial_conn is not None
+        if connected:
+            self.serial_status.config(text=f"Connected: {self.light_detector.port}", fg="#a6e3a1")
+        else:
+            self.serial_status.config(
+                text="Not connected (manual R/Y/G). Pick a port and Connect.", fg="#f9e2af")
+
+    def _connect_camera(self):
+        source = self.cam_var.get().strip()
+        if not source:
+            self.cam_status.config(text="Enter a camera index (0,1) or stream URL.", fg="#f9e2af")
+            return
+        ok, msg = self.camera.set_source(source)
+        self.cam_status.config(text=msg, fg="#a6e3a1" if ok else "#f38ba8")
+        print(f"[CAMERA] {msg}")
+
+    def _set_camera_status(self):
+        if self.camera.is_opened():
+            self.cam_status.config(text=f"Connected: {self.camera.source}", fg="#a6e3a1")
+        else:
+            self.cam_status.config(
+                text="No camera. Enter a source and Connect.", fg="#f9e2af")
+
+    def _show_no_camera(self):
+        """Display a placeholder on the canvas when no camera is available."""
+        placeholder = np.full((360, 640, 3), 24, dtype=np.uint8)
+        cv2.putText(placeholder, "NO CAMERA", (170, 170),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (180, 180, 180), 3)
+        cv2.putText(placeholder, "Select a source under CAMERA SOURCE -> Connect",
+                    (90, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (140, 140, 140), 1)
+        self._update_canvas(placeholder)
+
     def _set_light(self, state):
         self.light_detector.set_state(state)
         colors = {"red": "#f38ba8", "yellow": "#f9e2af", "green": "#a6e3a1"}
@@ -231,6 +335,10 @@ class TrafficEnforcementGUI:
 
             frame = self.camera.read()
             if frame is None:
+                # No camera yet — show a placeholder and keep the UI responsive
+                # so a source can be connected later.
+                self.root.after(0, self._show_no_camera)
+                time.sleep(0.2)
                 continue
 
             saved_clip = self.video_buffer.add(frame)
@@ -266,6 +374,7 @@ class TrafficEnforcementGUI:
                         plate_number=plate_text,
                         confidence=v.get("conf", 0.0),
                         frame=frame,
+                        light_state=light_state,
                     )
 
                     if image_path:
@@ -342,6 +451,7 @@ class TrafficEnforcementGUI:
         print("=" * 60)
 
         self.camera.start()
+        self._set_camera_status()
         self.running = True
 
         # Start video processing in background thread

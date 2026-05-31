@@ -1,3 +1,5 @@
+import threading
+
 import cv2
 import config
 
@@ -32,34 +34,69 @@ class Camera:
     def __init__(self, source=None):
         self.source = source if source is not None else config.CAMERA_SOURCE
         self.cap = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _coerce(source):
+        """Allow integer indices passed as strings ('0' -> 0)."""
+        if isinstance(source, str) and source.strip().isdigit():
+            return int(source.strip())
+        return source
 
     def start(self):
-        self.cap = cv2.VideoCapture(self.source)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open camera source: {self.source}")
+        """Open the camera. Never raises — if it can't open, the camera stays
+        closed and can be (re)connected later via set_source()."""
+        with self._lock:
+            self.cap = cv2.VideoCapture(self._coerce(self.source))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            if not self.cap.isOpened():
+                print(f"[CAMERA] Could not open source: {self.source} "
+                      f"(start anyway — set it later)")
         return self
 
+    def is_opened(self):
+        return self.cap is not None and self.cap.isOpened()
+
+    def set_source(self, source):
+        """Switch the camera source at runtime (from the GUI selector).
+
+        Returns (ok: bool, message: str).
+        """
+        with self._lock:
+            if self.cap is not None:
+                self.cap.release()
+            self.source = source
+            self.cap = cv2.VideoCapture(self._coerce(source))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+            ok = self.cap.isOpened()
+        if ok:
+            return True, f"Camera connected: {source}"
+        return False, f"Could not open camera: {source}"
+
     def read(self):
-        if self.cap is None:
-            raise RuntimeError("Camera not started. Call start() first.")
-        # Try multiple times for unreliable streams (MJPEG/HTTP)
-        for _ in range(5):
+        """Return a preprocessed frame, or None if no camera is available."""
+        with self._lock:
+            if self.cap is None or not self.cap.isOpened():
+                return None
+            # Try multiple times for unreliable streams (MJPEG/HTTP)
+            for _ in range(5):
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    return preprocess_frame(frame)
+            # Reconnect once if stream dropped
+            self.cap.release()
+            self.cap = cv2.VideoCapture(self._coerce(self.source))
             ret, frame = self.cap.read()
             if ret and frame is not None:
                 return preprocess_frame(frame)
-        # Reconnect if stream dropped
-        self.cap.release()
-        self.cap = cv2.VideoCapture(self.source)
-        ret, frame = self.cap.read()
-        if ret:
-            return preprocess_frame(frame)
         return None
 
     def release(self):
-        if self.cap is not None:
-            self.cap.release()
+        with self._lock:
+            if self.cap is not None:
+                self.cap.release()
 
     def __enter__(self):
         return self.start()
