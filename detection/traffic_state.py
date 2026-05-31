@@ -24,7 +24,10 @@ class TrafficLightDetector:
         self._serial_thread = None
 
         if mode == "serial":
-            self._start_serial()
+            # Connect in the background so a slow, busy, or stale COM port can
+            # never block app startup. The light stays 'unknown'/manual until
+            # the connection succeeds; reconnect anytime via set_serial_port().
+            threading.Thread(target=self._start_serial, daemon=True).start()
 
     def _start_serial(self):
         """Open the serial port and start the reader thread. Returns True on success."""
