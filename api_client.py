@@ -49,7 +49,7 @@ def post_violation(
     ok, jpg = cv2.imencode(".jpg", image_bgr)
     if not ok:
         return False, "image encode failed"
-    filename = f"{violation_type}_{track_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    filename = f"{violation_type.replace('+', '_')}_{track_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
     files = {"image": (filename, jpg.tobytes(), "image/jpeg")}
 
     try:

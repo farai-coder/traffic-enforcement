@@ -1,5 +1,5 @@
 {
-  "phone_ip": "192.168.60.213",
+  "phone_ip": "10.150.39.182",
   "phone_port": 8080,
   "phone_path": "/video",
   "serial_port": "COM16",

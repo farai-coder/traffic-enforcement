@@ -33,7 +33,7 @@ class ViolationLogger:
         """
         timestamp = datetime.now()
         timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        filename = f"{violation_type}_{track_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = f"{violation_type.replace('+', '_')}_{track_id}_{timestamp.strftime('%Y%m%d_%H%M%S')}.jpg"
         image_path = os.path.join(config.VIOLATIONS_DIR, filename)
 
         # Save evidence screenshot

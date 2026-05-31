@@ -29,6 +29,7 @@ import settings
 from anpr.plate_detector import PlateDetector
 from anpr.ocr import PlateOCR
 from api_client import post_violation
+from violations.incident import IncidentGate
 from detection.traffic_state import TrafficLightDetector
 from test_stop_line import FrameCaptureThread, _crossed_line, _side_of_line
 
@@ -129,10 +130,13 @@ class StopLineGUI:
         self.stop_event = threading.Event()
         self.running = True
 
+        self.incident_gate = IncidentGate(
+            cooldown_seconds=getattr(config, "VIOLATION_COOLDOWN_SECONDS", 60),
+        )
         self.last_capture_t = {}
         self.last_lane_t = {}
         self.track_positions = {}
-        self.cooldown_s = 1.0
+        self.cooldown_s = float(getattr(config, "VIOLATION_COOLDOWN_SECONDS", 60))
         self.last_seen_id = -1
 
         self.counts = {"REDLIGHT": 0, "STOPLINE": 0, "LANECHANGE": 0}
@@ -617,6 +621,7 @@ class StopLineGUI:
     def _reset(self):
         self.last_capture_t.clear()
         self.last_lane_t.clear()
+        self.incident_gate.clear()
         self.track_positions.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -775,6 +780,9 @@ class StopLineGUI:
             frame_idx += 1
 
     def _enqueue_anpr(self, track_id, tag, conf, frame):
+        if not self.incident_gate.allow(track_id, None):
+            return
+        self.incident_gate.mark(track_id, None)
         try:
             self.anpr_queue.put_nowait((track_id, tag, conf, frame.copy()))
         except queue.Full:
@@ -852,6 +860,9 @@ class StopLineGUI:
                 "plate": plate_text or "—",
             })
 
+            plate_for_gate = plate_text or "UNKNOWN"
+            self.incident_gate.mark(track_id, plate_for_gate)
+
             ok, resp = post_violation(
                 violation_type=TAG_TO_TYPE.get(tag, tag.lower()),
                 plate_number=plate_text,
@@ -861,8 +872,7 @@ class StopLineGUI:
                 image_bgr=anpr_frame,
             )
             if ok:
-                print(f"[API] {tag} #{track_id} posted OK (HTTP {resp.status_code})",
-                      flush=True)
+                print(f"[API] {tag} #{track_id} posted OK (one incident)", flush=True)
             else:
                 print(f"[API] {tag} #{track_id} POST failed: {resp}", flush=True)
 

@@ -15,62 +15,72 @@ class PlateDetector:
     def __init__(self):
         pass
 
-    def detect_plate(self, vehicle_crop):
-        """Find a license plate in the vehicle image crop.
-
-        Returns the plate crop image or None.
-        """
+    def _prepare_crop(self, vehicle_crop):
         if vehicle_crop is None or vehicle_crop.size == 0:
             return None
-
-        # Upscale small images for better detection
         h, w = vehicle_crop.shape[:2]
         if w < 400:
             scale = 400 / w
-            vehicle_crop = cv2.resize(vehicle_crop, None, fx=scale, fy=scale,
-                                       interpolation=cv2.INTER_CUBIC)
+            vehicle_crop = cv2.resize(
+                vehicle_crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC,
+            )
+        return vehicle_crop
 
-        # Primary: isolate the white rectangular plate region
-        plate = self._crop_white_region(vehicle_crop)
-        if plate is not None:
-            return plate
+    def iter_plate_crops(self, vehicle_crop):
+        """Yield plate image crops best-first (lower bumper region preferred)."""
+        vehicle_crop = self._prepare_crop(vehicle_crop)
+        if vehicle_crop is None:
+            return
 
-        # Fallback: color-based detection
-        plate = self._detect_by_color(vehicle_crop)
-        if plate is not None:
-            return plate
+        h, w = vehicle_crop.shape[:2]
+        seen_shapes = set()
 
-        # Fallback: morphological approach
-        plate = self._detect_morphological(vehicle_crop)
-        if plate is not None:
-            return plate
+        def _yield_unique(crop):
+            if crop is None or crop.size == 0:
+                return
+            key = (crop.shape[0], crop.shape[1])
+            if key in seen_shapes and crop.shape[0] * crop.shape[1] < 800:
+                return
+            seen_shapes.add(key)
+            yield crop
 
-        # Last resort: edge-based detection
-        plate = self._detect_by_contour(vehicle_crop)
-        return plate
+        for crop, _score in self._white_region_candidates(vehicle_crop):
+            yield from _yield_unique(crop)
 
-    def _crop_white_region(self, image):
-        """Crop the white plate region from the image using HSV masking.
+        for method in (
+            self._detect_by_color,
+            self._detect_morphological,
+            self._detect_by_contour,
+        ):
+            crop = method(vehicle_crop)
+            yield from _yield_unique(crop)
 
-        Filters out background (table, floor) by requiring the white region
-        to be surrounded by a non-white (colored) area like a car body.
-        """
+        # Plates sit on the lower front of toy cars — not on shop signs above.
+        for y_start in (0.45, 0.55, 0.65):
+            y0 = int(h * y_start)
+            band = vehicle_crop[y0:, :]
+            yield from _yield_unique(band)
+
+    def detect_plate(self, vehicle_crop):
+        """Return the highest-priority plate crop (first from iter_plate_crops)."""
+        for crop in self.iter_plate_crops(vehicle_crop):
+            return crop
+        return None
+
+    def _white_region_candidates(self, image):
+        """All white rectangular regions, sorted best-first (lower + plate-shaped)."""
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         h, w = image.shape[:2]
 
-        # Mask for white regions (the plate background)
         white_mask = cv2.inRange(hsv, np.array([0, 0, 150]), np.array([180, 80, 255]))
-
-        # Clean up: close gaps in the plate text, remove small noise
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
         kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
 
         contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        candidates = []
         img_area = w * h
+        ranked = []
 
         for contour in contours:
             x, y, cw, ch = cv2.boundingRect(contour)
@@ -78,52 +88,51 @@ class PlateDetector:
                 continue
             aspect = cw / float(ch)
             area = cw * ch
-
-            # Filter for plate-like rectangles
-            if not (1.5 <= aspect <= 8.0 and cw > 20 and ch > 8):
+            if not (2.0 <= aspect <= 6.5 and cw > 25 and ch > 10):
                 continue
-            if not (area > img_area * 0.002 and area < img_area * 0.4):
+            if not (area > img_area * 0.003 and area < img_area * 0.35):
                 continue
 
-            # Check that the white region has dark text inside it
-            roi = image[y:y+ch, x:x+cw]
+            roi = image[y:y + ch, x:x + cw]
             gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             _, text_mask = cv2.threshold(gray_roi, 120, 255, cv2.THRESH_BINARY_INV)
             text_ratio = cv2.countNonZero(text_mask) / (cw * ch)
-            if text_ratio < 0.05 or text_ratio > 0.7:
+            if text_ratio < 0.08 or text_ratio > 0.55:
                 continue
 
-            # Check that the region is NOT touching the edge of the image
-            # (table/floor white regions usually extend to edges)
+            y_center = (y + ch / 2) / h
+            if y_center < 0.30:
+                continue
+
             touches_edge = (x <= 2 or y <= 2 or x + cw >= w - 2 or y + ch >= h - 2)
+            aspect_score = 1.0 / (1.0 + abs(aspect - 3.5))
+            text_score = min(text_ratio / 0.25, 1.0)
+            position_score = y_center
+            edge_penalty = 0.4 if touches_edge else 1.0
+            score = (
+                position_score * 0.45
+                + aspect_score * 0.30
+                + text_score * 0.25
+            ) * edge_penalty
+            ranked.append((score, x, y, cw, ch))
 
-            # Score: prefer plate-shaped, has text, not at edge
-            aspect_score = 1.0 / (1.0 + abs(aspect - 4.0))
-            size_score = min(area / float(img_area), 0.3)
-            text_score = min(text_ratio / 0.3, 1.0)
-            edge_penalty = 0.5 if touches_edge else 1.0
-            score = (aspect_score * 0.4 + size_score * 0.3 + text_score * 0.3) * edge_penalty
-            candidates.append((x, y, cw, ch, score))
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        out = []
+        for score, x, y, cw, ch in ranked:
+            pad_x = int(cw * 0.05)
+            pad_y = int(ch * 0.1)
+            x1 = max(0, x - pad_x)
+            y1 = max(0, y - pad_y)
+            x2 = min(w, x + cw + pad_x)
+            y2 = min(h, y + ch + pad_y)
+            crop = image[y1:y2, x1:x2]
+            if crop.size > 0:
+                out.append((crop, score))
+        return out
 
-        if not candidates:
-            return None
-
-        # Pick best candidate
-        candidates.sort(key=lambda c: c[4], reverse=True)
-        x, y, cw, ch, _ = candidates[0]
-
-        # Tight crop with small padding
-        pad_x = int(cw * 0.05)
-        pad_y = int(ch * 0.1)
-        x1 = max(0, x - pad_x)
-        y1 = max(0, y - pad_y)
-        x2 = min(w, x + cw + pad_x)
-        y2 = min(h, y + ch + pad_y)
-        crop = image[y1:y2, x1:x2]
-        if crop.size > 0:
-            return crop
-
-        return None
+    def _crop_white_region(self, image):
+        ranked = self._white_region_candidates(image)
+        return ranked[0][0] if ranked else None
 
     def _detect_by_color(self, image):
         """Detect plate by finding white rectangular regions.

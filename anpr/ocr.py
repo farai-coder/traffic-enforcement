@@ -1,18 +1,52 @@
+import os
+
 import cv2
 import re
 import numpy as np
 from PIL import Image
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+
+import config
+from anpr.plate_format import normalise_plate
+
+
+class NullPlateOCR:
+    """Fallback when TrOCR cannot load (offline / no cache)."""
+
+    def read_plate(self, plate_image):
+        return None
 
 
 class PlateOCR:
     """Extracts text from a license plate image using Microsoft TrOCR (printed text)."""
 
-    def __init__(self):
-        print("[OCR] Loading microsoft/trocr-base-printed model...")
-        self.processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-printed")
-        self.model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-printed")
-        print("[OCR] Model loaded.")
+    def __init__(self, model_name=None):
+        if not getattr(config, "OCR_ENABLED", True):
+            raise OSError("OCR disabled in config (OCR_ENABLED = False)")
+
+        self.model_name = model_name or getattr(
+            config, "TROCR_MODEL", "microsoft/trocr-small-printed"
+        )
+        print(f"[OCR] Loading {self.model_name}...", flush=True)
+
+        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+
+        load_kwargs = {}
+        # Prefer cached weights when Hugging Face is unreachable.
+        try:
+            self.processor = TrOCRProcessor.from_pretrained(
+                self.model_name, local_files_only=True, **load_kwargs
+            )
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                self.model_name, local_files_only=True, **load_kwargs
+            )
+        except OSError:
+            print("[OCR] Not in local cache — downloading (needs internet)...", flush=True)
+            self.processor = TrOCRProcessor.from_pretrained(self.model_name, **load_kwargs)
+            self.model = VisionEncoderDecoderModel.from_pretrained(
+                self.model_name, **load_kwargs
+            )
+
+        print("[OCR] Model loaded.", flush=True)
 
     def read_plate(self, plate_image):
         """Extract text from a plate crop image.
@@ -51,28 +85,23 @@ class PlateOCR:
         enhanced = clahe.apply(gray)
         candidates.append(cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR))
 
-        best_text = None
-        best_score = 0
-
         for img in candidates:
             text = self._run_trocr(img)
-            if text:
-                clean = re.sub(r'[^A-Z0-9]', '', text.upper())
-                # Try to extract Zim plate pattern: 3 letters + 3-4 digits
-                plate = self._extract_zim_plate(clean)
-                if plate:
-                    return plate
-                score = len(clean)
-                if score > best_score:
-                    best_score = score
-                    best_text = clean
+            if not text:
+                continue
+            clean = re.sub(r"[^A-Z0-9]", "", text.upper())
+            plate = normalise_plate(clean)
+            if plate:
+                return plate
+            plate = normalise_plate(self._extract_zim_plate(clean))
+            if plate:
+                return plate
 
-        return best_text if best_text and len(best_text) >= 3 else None
+        return None
 
     def _extract_zim_plate(self, text):
         """Try to extract a Zimbabwean plate pattern (AAA 1234) from raw OCR text."""
-        # Zim plates: 3 letters followed by 3-4 digits
-        match = re.search(r'([A-Z]{2,3}\d{3,4})', text)
+        match = re.search(r"([A-Z]{3}\d{3,4})", text)
         if match:
             return match.group(1)
         return None
@@ -95,5 +124,23 @@ class PlateOCR:
             text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
             return text.strip()
-        except Exception as e:
+        except Exception:
             return None
+
+
+def load_plate_ocr():
+    """Load TrOCR or return a no-op OCR if offline / unavailable."""
+    try:
+        return PlateOCR()
+    except OSError as e:
+        print(
+            "[WARN] OCR unavailable — violations will still run; plates logged as UNKNOWN.",
+            flush=True,
+        )
+        print(f"[WARN] Reason: {e}", flush=True)
+        print(
+            "[WARN] Fix: connect to internet once and run:\n"
+            "       python -c \"from anpr.ocr import PlateOCR; PlateOCR()\"",
+            flush=True,
+        )
+        return NullPlateOCR()

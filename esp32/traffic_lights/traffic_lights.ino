@@ -17,8 +17,10 @@
  * Also sends current light state over Serial so the
  * Python detection system knows the light state.
  *
- * Serial output format: "STATE:red" or "STATE:green" or "STATE:yellow"
- * This is the state of TL1/TL3 (the pair facing the camera)
+ * Serial output format:
+ *   STATE:ew:green,ns:red
+ * ew = East-West pair (TL1 + TL3), ns = North-South pair (TL2 + TL4)
+ * Legacy single-line STATE:green still supported (treated as ew by Python)
  *
  * WIRING (ESP32 GPIO pins):
  * -------------------------
@@ -120,45 +122,47 @@ void setNorthSouth(char state) {
   setLight(TL4_RED, TL4_YELLOW, TL4_GREEN, state);
 }
 
-void sendState(const char* state) {
-  Serial.print("STATE:");
-  Serial.println(state);
+void sendState(const char* ewState, const char* nsState) {
+  Serial.print("STATE:ew:");
+  Serial.print(ewState);
+  Serial.print(",ns:");
+  Serial.println(nsState);
 }
 
 void loop() {
   // --- Phase 1: East-West GREEN, North-South RED ---
   setEastWest('G');
   setNorthSouth('R');
-  sendState("green");
+  sendState("green", "red");
   delay(GREEN_TIME);
 
   // --- Phase 2: East-West YELLOW, North-South RED ---
   setEastWest('Y');
   setNorthSouth('R');
-  sendState("yellow");
+  sendState("yellow", "red");
   delay(YELLOW_TIME);
 
   // --- Phase 3: All RED (clearance) ---
   setEastWest('R');
   setNorthSouth('R');
-  sendState("red");
+  sendState("red", "red");
   delay(RED_CLEAR_TIME);
 
   // --- Phase 4: North-South GREEN, East-West RED ---
   setNorthSouth('G');
   setEastWest('R');
-  sendState("red");  // Camera faces East-West, which is now red
+  sendState("red", "green");
   delay(GREEN_TIME);
 
   // --- Phase 5: North-South YELLOW, East-West RED ---
   setNorthSouth('Y');
   setEastWest('R');
-  sendState("red");
+  sendState("red", "yellow");
   delay(YELLOW_TIME);
 
   // --- Phase 6: All RED (clearance) ---
   setEastWest('R');
   setNorthSouth('R');
-  sendState("red");
+  sendState("red", "red");
   delay(RED_CLEAR_TIME);
 }

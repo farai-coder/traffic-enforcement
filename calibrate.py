@@ -12,14 +12,17 @@ Controls:
     3       - Switch to Lane Boundary mode (click 2 points per line)
     Z       - Undo last lane boundary
     C       - Clear all calibration
+    A       - Auto-detect stop line + lanes from board markings (current frame)
     S       - Save calibration to config.py
     Q/ESC   - Quit
 """
 
 import cv2
-import numpy as np
-import json
+import os
 import config
+from capture.camera import Camera
+from calibration.auto_lines import detect_board_lines, draw_detected
+from calibration.store import load as load_board_calibration, save as save_board_calibration
 
 # State
 mode = "stop_line"
@@ -81,8 +84,17 @@ def mouse_callback(event, x, y, flags, param):
 
 
 def save_config():
-    """Write calibration values back to config.py."""
-    with open("config.py", "r") as f:
+    """Write calibration to board_calibration.json (and sync config.py)."""
+    global stop_line_points, lane_lines, light_roi
+
+    if not stop_line_points or len(stop_line_points) != 2:
+        print("[WARN] Draw the stop line first (mode 2, two clicks), then save.")
+        return False
+
+    save_board_calibration(stop_line_points, lane_lines, light_roi)
+
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
+    with open(cfg_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     new_lines = []
@@ -94,13 +106,15 @@ def save_config():
             avg_y = (stop_line_points[0][1] + stop_line_points[1][1]) // 2
             new_lines.append(f"STOP_LINE_Y = {avg_y}\n")
         elif line.startswith("STOP_LINE_POINTS"):
-            # Skip - we'll add it after STOP_LINE_Y
+            if stop_line_points:
+                new_lines.append(f"STOP_LINE_POINTS = {stop_line_points}\n")
             continue
-        elif line.startswith("LANE_BOUNDARIES") and lane_lines:
-            # Replace old vertical-only format with new line format
-            new_lines.append(f"LANE_BOUNDARIES = []\n")
+        elif line.startswith("LANE_BOUNDARIES"):
+            new_lines.append("LANE_BOUNDARIES = []\n")
+            continue
         elif line.startswith("LANE_LINES"):
-            # Skip - we'll add after LANE_BOUNDARIES
+            if lane_lines:
+                new_lines.append(f"LANE_LINES = {lane_lines}\n")
             continue
         else:
             new_lines.append(line)
@@ -119,25 +133,42 @@ def save_config():
             f"LANE_BOUNDARIES = []\nLANE_LINES = {lane_lines}\n"
         )
 
-    with open("config.py", "w") as f:
+    with open(cfg_path, "w", encoding="utf-8") as f:
         f.write(config_text)
 
-    print("\n[SAVED] Config updated! Values written to config.py")
+    print("\n[SAVED] Calibration saved.")
     print(f"  Traffic Light ROI: {light_roi}")
     print(f"  Stop Line: {stop_line_points}")
     print(f"  Lane Lines: {lane_lines}")
+    print("  Restart main.py so it reloads these coordinates.")
+    return True
+
+
+def _key_is(key, char):
+    """Match key regardless of Caps Lock / Shift (OpenCV reports uppercase often)."""
+    return key in (ord(char.lower()), ord(char.upper()))
 
 
 def main():
     global mode, light_roi, stop_line_points, lane_lines
     global current_points, dragging, drag_start, drag_end
 
-    cap = cv2.VideoCapture(config.CAMERA_SOURCE)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
+    saved = load_board_calibration()
+    if saved.get("stop_line_points"):
+        stop_line_points = saved["stop_line_points"]
+    if saved.get("lane_lines"):
+        lane_lines = saved["lane_lines"]
+    if saved.get("light_roi"):
+        light_roi = saved["light_roi"]
 
-    if not cap.isOpened():
-        print("[ERROR] Cannot open webcam!")
+    print(f"[INFO] Camera source: {config.CAMERA_SOURCE}")
+    print(f"[INFO] Rotate 90°: {getattr(config, 'CAMERA_ROTATE_90', True)}  "
+          f"| Output height: {getattr(config, 'FRAME_OUTPUT_HEIGHT', 500)} px")
+    camera = Camera()
+    try:
+        camera.start()
+    except RuntimeError as e:
+        print(f"[ERROR] {e}")
         return
 
     window_name = "Calibration Tool"
@@ -146,21 +177,19 @@ def main():
 
     print("\n" + "=" * 60)
     print("  CALIBRATION TOOL")
-    print("  Press 1=Light ROI | 2=Stop Line | 3=Lane Lines")
+    print("  Press 1=Light ROI | 2=Stop Line | 3=Lane Lines | A=Auto-detect")
     print("  Press Z=Undo last lane | C=Clear all | S=Save | Q=Quit")
     print("=" * 60)
     print(f"\nCurrent mode: {mode_names[mode]}")
     print("Click two points to draw the stop line.\n")
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    saved_flash = 0  # frames to show on-screen "SAVED" banner
 
-        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        h_orig, w_orig = frame.shape[:2]
-        scale = 500 / h_orig
-        frame = cv2.resize(frame, (int(w_orig * scale), 500))
+    while True:
+        frame = camera.read()
+        if frame is None:
+            continue
+
         display = frame.copy()
         h, w = display.shape[:2]
 
@@ -195,44 +224,64 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Draw mode indicator
-        mode_text = f"MODE: {mode_names[mode]} | 1/2/3=switch | Z=undo lane | S=Save | Q=Quit"
+        mode_text = (f"MODE: {mode_names[mode]} | A=auto | 1/2/3=switch | "
+                     f"Z=undo | S=Save | Q=Quit")
         cv2.rectangle(display, (0, h - 40), (w, h), (0, 0, 0), -1)
         cv2.putText(display, mode_text, (10, h - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
+        if saved_flash > 0:
+            cv2.rectangle(display, (0, 0), (w, 52), (0, 120, 0), -1)
+            cv2.putText(display, "SAVED — restart main.py", (10, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+            saved_flash -= 1
+
         cv2.imshow(window_name, display)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == ord("q") or key == 27:
+        if _key_is(key, "q") or key == 27:
             break
-        elif key == ord("1"):
+        elif _key_is(key, "1"):
             mode = "light_roi"
             current_points.clear()
             print(f"\nMode: {mode_names[mode]} - Drag a rectangle around the traffic light")
-        elif key == ord("2"):
+        elif _key_is(key, "2"):
             mode = "stop_line"
             current_points.clear()
             print(f"\nMode: {mode_names[mode]} - Click two points to draw the stop line")
-        elif key == ord("3"):
+        elif _key_is(key, "3"):
             mode = "lane_boundary"
             current_points.clear()
             print(f"\nMode: {mode_names[mode]} - Click two points per lane line (can be diagonal)")
-        elif key == ord("z"):
+        elif _key_is(key, "z"):
             if lane_lines:
                 removed = lane_lines.pop()
                 print(f"[UNDO] Removed last lane line: {removed}")
             else:
                 print("[UNDO] No lane lines to remove")
-        elif key == ord("c"):
+        elif _key_is(key, "c"):
             light_roi = None
             stop_line_points = []
             lane_lines = []
             current_points.clear()
             print("\n[CLEARED] All calibration reset.")
-        elif key == ord("s"):
-            save_config()
+        elif _key_is(key, "a"):
+            sl, lanes, info = detect_board_lines(frame)
+            if sl is None:
+                print(f"[AUTO] Failed: {info}")
+            else:
+                stop_line_points = sl
+                lane_lines = lanes
+                display = draw_detected(frame, sl, lanes)
+                print(f"[AUTO] Stop: {sl}")
+                print(f"[AUTO] Lanes ({len(lanes)}): {lanes}")
+                cv2.imshow(window_name, display)
+                cv2.waitKey(800)
+        elif _key_is(key, "s"):
+            if save_config():
+                saved_flash = 60
 
-    cap.release()
+    camera.release()
     cv2.destroyAllWindows()
 
 

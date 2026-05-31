@@ -18,16 +18,26 @@ from tkinter import ttk
 import cv2
 import threading
 import time
+import config
 from PIL import Image, ImageTk
 from datetime import datetime
 
 from capture.camera import Camera
+from capture.frame_thread import FrameCaptureThread
 from capture.video_buffer import VideoBuffer
 from detection.traffic_state import TrafficLightDetector
 from detection.violation_detector import ViolationDetector
 from anpr.plate_detector import PlateDetector
-from anpr.ocr import PlateOCR
+from anpr.plate_cache import PlateReadCache
+from anpr.reader import read_plate_for_vehicle
+from anpr.ocr import load_plate_ocr
 from violations.logger import ViolationLogger
+from violations.incident import (
+    IncidentGate,
+    PhotoSampler,
+    collapse_by_vehicle,
+    label_from_subject,
+)
 
 
 class TrafficEnforcementGUI:
@@ -40,17 +50,36 @@ class TrafficEnforcementGUI:
         self.running = False
         self.paused = False
         self.frame_count = 0
-        self.logged_violations = set()
         self.current_frame = None
 
         # Initialize modules
-        self.camera = Camera()
-        self.video_buffer = VideoBuffer(pre_seconds=1.5, post_seconds=1.5)
+        if getattr(config, "USE_ASYNC_CAMERA", True):
+            self.camera = FrameCaptureThread()
+        else:
+            self.camera = Camera()
+        self._detect_skip = max(1, getattr(config, "DETECTION_FRAME_SKIP", 2))
+        self._detect_tick = 0
+        self._overlay = {
+            "detections": [], "violations": [], "light_state": "unknown",
+        }
+        self.video_buffer = VideoBuffer(
+            pre_seconds=getattr(config, "VIOLATION_VIDEO_PRE_SECONDS", 1.0),
+            post_seconds=getattr(config, "VIOLATION_VIDEO_POST_SECONDS", 1.0),
+        )
+        self.incident_gate = IncidentGate(
+            cooldown_seconds=getattr(config, "VIOLATION_COOLDOWN_SECONDS", 60),
+        )
+        self.photo_sampler = PhotoSampler(
+            interval_seconds=getattr(config, "VIOLATION_PHOTO_INTERVAL_SECONDS", 0.5),
+        )
+        self.photos_saved = 0
+        self.videos_recorded = 0
         self.light_detector = TrafficLightDetector(mode="manual")
         self.light_detector.set_state("green")
         self.violation_detector = ViolationDetector()
         self.plate_detector = PlateDetector()
-        self.plate_ocr = PlateOCR()
+        self.plate_ocr = load_plate_ocr()
+        self.plate_cache = PlateReadCache(max_attempts=20)
         self.logger = ViolationLogger()
 
         self._build_ui()
@@ -187,8 +216,12 @@ class TrafficEnforcementGUI:
         print(f"[LIGHT] Switched to {state.upper()}")
 
     def _reset_tracking(self):
-        self.logged_violations.clear()
-        self.violation_detector.tracked_vehicles.clear()
+        self.incident_gate.clear()
+        self.photo_sampler.clear()
+        self.plate_cache.clear()
+        self.photos_saved = 0
+        self.videos_recorded = 0
+        self.violation_detector.reset_tracking()
         # Clear the treeview
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -227,7 +260,8 @@ class TrafficEnforcementGUI:
                 time.sleep(0.03)
                 continue
 
-            frame = self.camera.read()
+            raw = self.camera.read()
+            frame = raw[0] if isinstance(raw, tuple) else raw
             if frame is None:
                 continue
 
@@ -235,44 +269,102 @@ class TrafficEnforcementGUI:
             if saved_clip:
                 print(f"[VIDEO] Saved {saved_clip}")
             self.frame_count += 1
+            self._detect_tick += 1
+            run_detection = self._detect_tick % self._detect_skip == 0
 
-            # Step 1: Detect traffic light state
-            light_state = self.light_detector.detect(frame)
+            if run_detection:
+                light_state = self.light_detector.detect(frame)
+                detections = self.violation_detector.detect_vehicles(frame)
+                violations = collapse_by_vehicle(
+                    self.violation_detector.check_violations(detections, light_state)
+                )
+                self._overlay["detections"] = detections
+                self._overlay["violations"] = violations
+                self._overlay["light_state"] = light_state
+            else:
+                light_state = self._overlay["light_state"]
+                detections = self._overlay["detections"]
+                violations = self._overlay["violations"]
 
-            # Step 2: Detect vehicles and check violations
-            detections = self.violation_detector.detect_vehicles(frame)
-            violations = self.violation_detector.check_violations(detections, light_state)
+            evidence_subjects = self.violation_detector.subjects_for_evidence(
+                detections, light_state
+            )
+            new_offense_ids = (
+                {v["track_id"] for v in violations} if run_detection else set()
+            )
+            conf_by_id = {d["track_id"]: d["conf"] for d in detections}
+            require_plate = getattr(config, "VIOLATION_REQUIRE_VALID_PLATE", True)
 
-            # Step 3: For each new violation, run ANPR and log
-            for v in violations:
-                key = (v["track_id"], v["type"])
-                if key not in self.logged_violations:
-                    self.logged_violations.add(key)
+            capture_queue = []
+            if run_detection:
+                for v in violations:
+                    tid = v["track_id"]
+                    capture_queue.append((
+                        True,
+                        {
+                            "track_id": tid,
+                            "bbox": v["bbox"],
+                            "types": self.violation_detector.committed_violation_types(
+                                tid, {"track_id": tid, "bbox": v["bbox"]}, light_state
+                            ),
+                            "conf": v.get("conf", conf_by_id.get(tid, 0.0)),
+                        },
+                    ))
+            for sub in evidence_subjects:
+                if sub["track_id"] not in new_offense_ids:
+                    capture_queue.append((False, sub))
 
-                    x1, y1, x2, y2 = v["bbox"]
-                    vehicle_crop = frame[y1:y2, x1:x2]
+            for immediate_flag, sub in capture_queue:
+                track_id = sub["track_id"]
+                if require_plate and self.plate_cache.skip_capture(track_id):
+                    continue
+                urgent = immediate_flag or (
+                    require_plate
+                    and not self.plate_cache.get(track_id)
+                    and not self.plate_cache.skip_capture(track_id)
+                )
+                if not self.photo_sampler.should_capture(track_id, immediate=urgent):
+                    continue
 
-                    plate_text = None
-                    if vehicle_crop.size > 0:
-                        plate_image = self.plate_detector.detect_plate(vehicle_crop)
-                        if plate_image is not None:
-                            plate_text = self.plate_ocr.read_plate(plate_image)
+                bbox = sub["bbox"]
 
-                    image_path = self.logger.log(
-                        violation_type=v["type"],
-                        track_id=v["track_id"],
-                        plate_number=plate_text,
-                        confidence=v.get("conf", 0.0),
-                        frame=frame,
+                def _read_plate(bbox=bbox):
+                    text, _ = read_plate_for_vehicle(
+                        frame, bbox, self.plate_detector, self.plate_ocr,
                     )
+                    return text
 
-                    if image_path:
+                plate_number = self.plate_cache.resolve(track_id, _read_plate)
+                if require_plate and not plate_number:
+                    continue
+
+                self.photo_sampler.mark_captured(track_id)
+                violation_label = label_from_subject(
+                    self.violation_detector, sub, light_state
+                )
+
+                image_path = self.logger.log(
+                    violation_type=violation_label,
+                    track_id=track_id,
+                    plate_number=plate_number,
+                    confidence=sub.get("conf", conf_by_id.get(track_id, 0.0)),
+                    frame=frame,
+                )
+                if image_path:
+                    self.photos_saved += 1
+
+                if self.incident_gate.allow(track_id, plate_number):
+                    self.incident_gate.mark(track_id, plate_number)
+                    self.videos_recorded += 1
+
+                    if image_path and getattr(config, "VIOLATION_SAVE_VIDEO", True):
                         video_path = image_path.rsplit(".", 1)[0] + ".mp4"
                         if self.video_buffer.trigger(video_path):
-                            print(f"[VIDEO] Recording post-roll → {video_path}")
+                            print(f"[VIDEO] Short clip → {video_path}")
 
-                    # Update GUI from main thread
-                    self.root.after(0, self._add_violation, v["type"], v["track_id"], plate_text)
+                    self.root.after(
+                        0, self._add_violation, violation_label, track_id, plate_number
+                    )
 
             # Step 4: Draw annotations
             frame = self.light_detector.draw(frame)
@@ -324,7 +416,7 @@ class TrafficEnforcementGUI:
 
     def _update_stats(self, num_vehicles):
         self.stats_label.config(
-            text=f"Vehicles: {num_vehicles} | Violations: {len(self.logged_violations)} | Frame: {self.frame_count}"
+            text=f"Vehicles: {num_vehicles} | Photos: {self.photos_saved} | Videos: {self.videos_recorded} | Frame: {self.frame_count}"
         )
 
     def _on_close(self):
@@ -349,7 +441,7 @@ class TrafficEnforcementGUI:
         # Run tkinter main loop
         self.root.mainloop()
 
-        print(f"\n[DONE] Total violations logged: {len(self.logged_violations)}")
+        print(f"\n[DONE] Photos: {self.photos_saved} | Videos: {self.videos_recorded}")
         print(f"[DONE] Evidence saved in: data/violations/")
 
 
