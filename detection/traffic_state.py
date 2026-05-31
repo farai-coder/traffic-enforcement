@@ -114,7 +114,15 @@ class TrafficLightDetector:
         return self.current_state
 
     def draw(self, frame):
-        """Draw the ROI rectangle and detected state on the frame."""
+        """Draw the light-detection ROI on the frame.
+
+        Only shown in HSV/vision mode, where the ROI marks where the light is
+        read from the camera. In serial/manual mode the ROI is meaningless
+        (state comes from the ESP32 / buttons), so nothing is drawn.
+        """
+        if self.mode != "hsv":
+            return frame
+
         x, y, w, h = self.roi
         color_map = {
             "red": (0, 0, 255),

@@ -13,9 +13,19 @@ ANPR_CAMERA_SOURCE = 1  # Laptop webcam for plate reading
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
+# --- Frame Orientation ---
+# Rotation applied to every captured frame BEFORE detection/calibration, so the
+# calibrated zones and the detector always see the same orientation.
+# Options: None (no rotation), "cw" (90° clockwise), "ccw" (90° counter-clockwise), "180".
+# The phone camera is mounted sideways and needs "cw"; an upright laptop webcam
+# needs None. The webcam launchers (run_webcam.py / run_calibrate_webcam.py)
+# override this to None.
+CAMERA_ROTATION = "cw"
+TARGET_FRAME_HEIGHT = 500  # every frame is resized to this height (width scaled to match)
+
 # --- YOLOv8 Settings ---
-YOLO_MODEL = "yolov8n.pt"  # nano model for speed
-VEHICLE_CLASSES = [2, 3, 5, 7]  # COCO classes: car, motorcycle, bus, truck
+YOLO_MODEL = "toy_cars.pt"  # custom toy-car detector (trained via dataset_tools); was yolov8n.pt
+VEHICLE_CLASSES = [0]  # custom model has ONE class: 0 = car (stock YOLO used [2,3,5,7])
 CONFIDENCE_THRESHOLD = 0.15
 FRAME_SKIP = 1  # 1 = run YOLO on every new frame the capture thread delivers
 
@@ -40,13 +50,18 @@ MIN_LIGHT_AREA = 50  # Minimum contour area to count as a detected light (low fo
 
 # --- Violation Zones ---
 # Stop line: y-coordinate in the frame. Vehicles below this line when light is red = violation.
-STOP_LINE_Y = 201
-STOP_LINE_POINTS = [(3, 261), (123, 141)]
+STOP_LINE_Y = 272
+STOP_LINE_POINTS = [(11, 263), (829, 282)]
+
+# Red-light line: a second line deeper into the intersection (past the stop line).
+# Crossing this on red = the vehicle actually ran the light (logged as red_light, separate
+# from a stop_line encroachment). None = no red-light line calibrated yet.
+RED_LIGHT_LINE_POINTS = [(5, 357), (859, 360)]
 
 # Lane boundaries: list of x-coordinates defining lane dividers (left to right)
 # Vehicles crossing these while moving = illegal lane change
 LANE_BOUNDARIES = []
-LANE_LINES = [[(3, 269), (278, 353)], [(45, 221), (276, 281)], [(93, 179), (273, 227)]]
+LANE_LINES = [[(8, 241), (111, 58)], [(416, 264), (407, 55)], [(827, 266), (704, 50)]]
 
 # Number of frames a vehicle must be tracked crossing a lane boundary to trigger violation
 LANE_CHANGE_FRAMES = 5

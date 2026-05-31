@@ -1,6 +1,30 @@
 import cv2
 import config
 
+_ROTATION_CODES = {
+    "cw": cv2.ROTATE_90_CLOCKWISE,
+    "ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+    "180": cv2.ROTATE_180,
+}
+
+
+def preprocess_frame(frame):
+    """Apply the configured rotation + resize to a captured frame.
+
+    Centralizes the rotate/resize so the live detector, the calibrator, and the
+    dataset tools all see frames in exactly the same orientation and scale.
+    Controlled by config.CAMERA_ROTATION and config.TARGET_FRAME_HEIGHT.
+    """
+    rot = getattr(config, "CAMERA_ROTATION", "cw")
+    if rot:
+        code = _ROTATION_CODES.get(str(rot).lower())
+        if code is not None:
+            frame = cv2.rotate(frame, code)
+    h, w = frame.shape[:2]
+    target = getattr(config, "TARGET_FRAME_HEIGHT", 500)
+    scale = target / h
+    return cv2.resize(frame, (int(w * scale), target))
+
 
 class Camera:
     """Handles webcam video capture."""
@@ -24,20 +48,13 @@ class Camera:
         for _ in range(5):
             ret, frame = self.cap.read()
             if ret and frame is not None:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                h, w = frame.shape[:2]
-                scale = 500 / h
-                frame = cv2.resize(frame, (int(w * scale), 500))
-                return frame
+                return preprocess_frame(frame)
         # Reconnect if stream dropped
         self.cap.release()
         self.cap = cv2.VideoCapture(self.source)
         ret, frame = self.cap.read()
         if ret:
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            h, w = frame.shape[:2]
-            scale = 500 / h
-            return cv2.resize(frame, (int(w * scale), 500))
+            return preprocess_frame(frame)
         return None
 
     def release(self):

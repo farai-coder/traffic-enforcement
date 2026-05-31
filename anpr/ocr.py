@@ -51,30 +51,26 @@ class PlateOCR:
         enhanced = clahe.apply(gray)
         candidates.append(cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR))
 
-        best_text = None
-        best_score = 0
-
         for img in candidates:
             text = self._run_trocr(img)
             if text:
                 clean = re.sub(r'[^A-Z0-9]', '', text.upper())
-                # Try to extract Zim plate pattern: 3 letters + 3-4 digits
+                # Only accept a valid plate: exactly 3 letters + 4 digits.
                 plate = self._extract_zim_plate(clean)
                 if plate:
                     return plate
-                score = len(clean)
-                if score > best_score:
-                    best_score = score
-                    best_text = clean
 
-        return best_text if best_text and len(best_text) >= 3 else None
+        # No valid plate found -> not a real plate, don't report one.
+        return None
 
     def _extract_zim_plate(self, text):
-        """Try to extract a Zimbabwean plate pattern (AAA 1234) from raw OCR text."""
-        # Zim plates: 3 letters followed by 3-4 digits
-        match = re.search(r'([A-Z]{2,3}\d{3,4})', text)
+        """Extract a valid plate: exactly 3 letters followed by 4 digits (e.g. ADM 3421).
+
+        Anything that doesn't match this format is treated as not a real plate.
+        """
+        match = re.search(r'([A-Z]{3})(\d{4})', text)
         if match:
-            return match.group(1)
+            return f"{match.group(1)} {match.group(2)}"
         return None
 
     def _run_trocr(self, image):

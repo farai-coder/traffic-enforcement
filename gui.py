@@ -46,8 +46,10 @@ class TrafficEnforcementGUI:
         # Initialize modules
         self.camera = Camera()
         self.video_buffer = VideoBuffer(pre_seconds=1.5, post_seconds=1.5)
-        self.light_detector = TrafficLightDetector(mode="manual")
-        self.light_detector.set_state("green")
+        # Serial mode: read live light state from the ESP32 over the COM port in
+        # settings.json. Falls back to manual (R/Y/G buttons) if the port can't open.
+        self.light_detector = TrafficLightDetector(mode="serial")
+        self.light_detector.set_state("unknown")
         self.violation_detector = ViolationDetector()
         self.plate_detector = PlateDetector()
         self.plate_ocr = PlateOCR()

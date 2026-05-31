@@ -2,6 +2,6 @@
   "phone_ip": "192.168.60.213",
   "phone_port": 8080,
   "phone_path": "/video",
-  "serial_port": "COM16",
+  "serial_port": "COM5",
   "serial_baud": 9600
 }

@@ -28,6 +28,8 @@ class ViolationDetector:
         self.lane_lines = getattr(config, "LANE_LINES", [])
         # Support diagonal stop line
         self.stop_line_points = getattr(config, "STOP_LINE_POINTS", None)
+        # Deeper red-light line (past the stop line) — crossing it on red = ran the light
+        self.red_light_line_points = getattr(config, "RED_LIGHT_LINE_POINTS", None)
         # Fallback to old vertical-only lane boundaries
         self.lane_boundaries = config.LANE_BOUNDARIES
         # Track vehicles: {track_id: {"positions": [(cx, cy), ...], "violated": set()}}
@@ -77,33 +79,43 @@ class ViolationDetector:
             if len(tracker["positions"]) > 30:
                 tracker["positions"] = tracker["positions"][-30:]
 
-            # --- Red Light + Stop Line Violation (red only) ---
-            # Triggers as soon as the vehicle's bbox intersects the stop line.
+            # --- Stop-line & red-light violations (both enforced on red, on different lines) ---
+            # Stop line (near): crossing it on red = stop_line (encroached over the line).
+            # Red-light line (deeper): crossing it on red = red_light (actually ran the light).
+            # A vehicle that blows through crosses both lines and triggers both violations.
             if light_state == "red":
-                crossed = False
+                rect = (x1, y1, x2 - x1, y2 - y1)
+
+                # Stop line
                 if self.stop_line_points:
-                    rect = (x1, y1, x2 - x1, y2 - y1)
-                    crossed, _, _ = cv2.clipLine(
+                    crossed_stop, _, _ = cv2.clipLine(
                         rect,
                         tuple(self.stop_line_points[0]),
                         tuple(self.stop_line_points[1]),
                     )
                 else:
-                    crossed = y1 <= self.stop_line_y <= y2
+                    crossed_stop = y1 <= self.stop_line_y <= y2
 
-                if crossed:
-                    if "red_light" not in tracker["violated"]:
+                if crossed_stop and "stop_line" not in tracker["violated"]:
+                    tracker["violated"].add("stop_line")
+                    violations.append({
+                        "track_id": track_id,
+                        "type": "stop_line",
+                        "bbox": det["bbox"],
+                    })
+
+                # Red-light line (only if calibrated)
+                if self.red_light_line_points:
+                    crossed_red, _, _ = cv2.clipLine(
+                        rect,
+                        tuple(self.red_light_line_points[0]),
+                        tuple(self.red_light_line_points[1]),
+                    )
+                    if crossed_red and "red_light" not in tracker["violated"]:
                         tracker["violated"].add("red_light")
                         violations.append({
                             "track_id": track_id,
                             "type": "red_light",
-                            "bbox": det["bbox"],
-                        })
-                    if "stop_line" not in tracker["violated"]:
-                        tracker["violated"].add("stop_line")
-                        violations.append({
-                            "track_id": track_id,
-                            "type": "stop_line",
                             "bbox": det["bbox"],
                         })
 
@@ -155,6 +167,18 @@ class ViolationDetector:
                      color, thickness)
             if enforced:
                 cv2.putText(frame, "STOP LINE", (self.stop_line_points[0][0], self.stop_line_points[0][1] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        # Draw red-light line (deeper) — orange when enforced, dim when not.
+        if self.red_light_line_points:
+            enforced = light_state == "red"
+            color = (0, 128, 255) if enforced else (90, 90, 90)
+            thickness = 3 if enforced else 1
+            cv2.line(frame, tuple(self.red_light_line_points[0]), tuple(self.red_light_line_points[1]),
+                     color, thickness)
+            if enforced:
+                cv2.putText(frame, "RED LIGHT LINE",
+                            (self.red_light_line_points[0][0], self.red_light_line_points[0][1] - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # Draw diagonal lane lines

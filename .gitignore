@@ -11,3 +11,6 @@ venv/
 
 # Per-machine output (violation evidence, CSVs, screenshots)
 data/
+
+# Training runs (per-machine YOLO output: plots, metrics, checkpoints)
+runs/

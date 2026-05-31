@@ -4,11 +4,13 @@ Calibration Tool for Traffic Enforcement System
 Opens your webcam and lets you draw:
   1. Traffic Light ROI (drag a rectangle)
   2. Stop Line (click two points to draw a line)
+  4. Red-Light Line (click two points - deeper than the stop line)
   3. Lane Boundaries (click two points per line - can be diagonal)
 
 Controls:
     1       - Switch to Traffic Light ROI mode
     2       - Switch to Stop Line mode (click 2 points)
+    4       - Switch to Red-Light Line mode (click 2 points)
     3       - Switch to Lane Boundary mode (click 2 points per line)
     Z       - Undo last lane boundary
     C       - Clear all calibration
@@ -20,14 +22,21 @@ import cv2
 import numpy as np
 import json
 import config
+from capture.camera import preprocess_frame
 
 # State
 mode = "stop_line"
-mode_names = {"light_roi": "TRAFFIC LIGHT ROI", "stop_line": "STOP LINE", "lane_boundary": "LANE BOUNDARIES"}
+mode_names = {
+    "light_roi": "TRAFFIC LIGHT ROI",
+    "stop_line": "STOP LINE",
+    "red_light_line": "RED LIGHT LINE",
+    "lane_boundary": "LANE BOUNDARIES",
+}
 
 # Calibration values
 light_roi = None                # (x, y, w, h)
 stop_line_points = []           # [(x1,y1), (x2,y2)]
+red_light_line_points = []      # [(x1,y1), (x2,y2)] — deeper line, ran-the-light
 lane_lines = []                 # [[(x1,y1),(x2,y2)], ...]
 
 # Temp state for current line being drawn
@@ -38,7 +47,7 @@ drag_end = None
 
 
 def mouse_callback(event, x, y, flags, param):
-    global mode, light_roi, stop_line_points, lane_lines
+    global mode, light_roi, stop_line_points, red_light_line_points, lane_lines
     global current_points, dragging, drag_start, drag_end
 
     if mode == "light_roi":
@@ -69,6 +78,16 @@ def mouse_callback(event, x, y, flags, param):
                 print(f"[SET] Stop Line: {stop_line_points[0]} -> {stop_line_points[1]}")
                 current_points.clear()
 
+    elif mode == "red_light_line":
+        if event == cv2.EVENT_LBUTTONDOWN:
+            current_points.append((x, y))
+            if len(current_points) == 1:
+                print(f"[RED LIGHT LINE] First point: ({x}, {y}) - click second point")
+            elif len(current_points) == 2:
+                red_light_line_points = list(current_points)
+                print(f"[SET] Red Light Line: {red_light_line_points[0]} -> {red_light_line_points[1]}")
+                current_points.clear()
+
     elif mode == "lane_boundary":
         if event == cv2.EVENT_LBUTTONDOWN:
             current_points.append((x, y))
@@ -96,6 +115,8 @@ def save_config():
         elif line.startswith("STOP_LINE_POINTS"):
             # Skip - we'll add it after STOP_LINE_Y
             continue
+        elif line.startswith("RED_LIGHT_LINE_POINTS") and red_light_line_points:
+            new_lines.append(f"RED_LIGHT_LINE_POINTS = {red_light_line_points}\n")
         elif line.startswith("LANE_BOUNDARIES") and lane_lines:
             # Replace old vertical-only format with new line format
             new_lines.append(f"LANE_BOUNDARIES = []\n")
@@ -118,6 +139,12 @@ def save_config():
             "LANE_BOUNDARIES = []\n",
             f"LANE_BOUNDARIES = []\nLANE_LINES = {lane_lines}\n"
         )
+    if "RED_LIGHT_LINE_POINTS" not in config_text and red_light_line_points and stop_line_points:
+        config_text = config_text.replace(
+            f"STOP_LINE_POINTS = {stop_line_points}\n",
+            f"STOP_LINE_POINTS = {stop_line_points}\n"
+            f"RED_LIGHT_LINE_POINTS = {red_light_line_points}\n"
+        )
 
     with open("config.py", "w") as f:
         f.write(config_text)
@@ -125,12 +152,36 @@ def save_config():
     print("\n[SAVED] Config updated! Values written to config.py")
     print(f"  Traffic Light ROI: {light_roi}")
     print(f"  Stop Line: {stop_line_points}")
+    print(f"  Red Light Line: {red_light_line_points}")
     print(f"  Lane Lines: {lane_lines}")
 
 
+def load_existing():
+    """Preload zones already saved in config.py so they show on startup."""
+    global light_roi, stop_line_points, red_light_line_points, lane_lines
+
+    roi = getattr(config, "TRAFFIC_LIGHT_ROI", None)
+    if roi:
+        light_roi = tuple(roi)
+
+    sl = getattr(config, "STOP_LINE_POINTS", None)
+    if sl:
+        stop_line_points = [tuple(p) for p in sl]
+
+    rl = getattr(config, "RED_LIGHT_LINE_POINTS", None)
+    if rl:
+        red_light_line_points = [tuple(p) for p in rl]
+
+    ll = getattr(config, "LANE_LINES", None)
+    if ll:
+        lane_lines = [[tuple(p) for p in lane] for lane in ll]
+
+
 def main():
-    global mode, light_roi, stop_line_points, lane_lines
+    global mode, light_roi, stop_line_points, red_light_line_points, lane_lines
     global current_points, dragging, drag_start, drag_end
+
+    load_existing()
 
     cap = cv2.VideoCapture(config.CAMERA_SOURCE)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
@@ -146,7 +197,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("  CALIBRATION TOOL")
-    print("  Press 1=Light ROI | 2=Stop Line | 3=Lane Lines")
+    print("  Press 1=Light ROI | 2=Stop Line | 4=Red-Light Line | 3=Lane Lines")
     print("  Press Z=Undo last lane | C=Clear all | S=Save | Q=Quit")
     print("=" * 60)
     print(f"\nCurrent mode: {mode_names[mode]}")
@@ -157,10 +208,7 @@ def main():
         if not ret:
             break
 
-        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        h_orig, w_orig = frame.shape[:2]
-        scale = 500 / h_orig
-        frame = cv2.resize(frame, (int(w_orig * scale), 500))
+        frame = preprocess_frame(frame)
         display = frame.copy()
         h, w = display.shape[:2]
 
@@ -168,8 +216,6 @@ def main():
         if light_roi is not None:
             rx, ry, rw, rh = light_roi
             cv2.rectangle(display, (rx, ry), (rx + rw, ry + rh), (0, 255, 255), 2)
-            cv2.putText(display, "LIGHT ROI", (rx, ry - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
         if dragging and drag_start and drag_end:
             cv2.rectangle(display, drag_start, drag_end, (0, 255, 255), 2)
@@ -177,16 +223,14 @@ def main():
         # Draw stop line
         if len(stop_line_points) == 2:
             cv2.line(display, stop_line_points[0], stop_line_points[1], (0, 0, 255), 3)
-            cv2.putText(display, "STOP LINE", (stop_line_points[0][0], stop_line_points[0][1] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+        # Draw red-light line (orange, to distinguish from the red stop line)
+        if len(red_light_line_points) == 2:
+            cv2.line(display, red_light_line_points[0], red_light_line_points[1], (0, 128, 255), 3)
 
         # Draw lane lines
-        for i, lane in enumerate(lane_lines):
+        for lane in lane_lines:
             cv2.line(display, tuple(lane[0]), tuple(lane[1]), (255, 255, 0), 2)
-            mid_x = (lane[0][0] + lane[1][0]) // 2
-            mid_y = (lane[0][1] + lane[1][1]) // 2
-            cv2.putText(display, f"Lane {i+1}", (mid_x + 5, mid_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
         # Draw current partial clicks (first point placed, waiting for second)
         if len(current_points) == 1:
@@ -195,7 +239,7 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Draw mode indicator
-        mode_text = f"MODE: {mode_names[mode]} | 1/2/3=switch | Z=undo lane | S=Save | Q=Quit"
+        mode_text = f"MODE: {mode_names[mode]} | 1/2/4/3=switch | Z=undo lane | S=Save | Q=Quit"
         cv2.rectangle(display, (0, h - 40), (w, h), (0, 0, 0), -1)
         cv2.putText(display, mode_text, (10, h - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -213,6 +257,10 @@ def main():
             mode = "stop_line"
             current_points.clear()
             print(f"\nMode: {mode_names[mode]} - Click two points to draw the stop line")
+        elif key == ord("4"):
+            mode = "red_light_line"
+            current_points.clear()
+            print(f"\nMode: {mode_names[mode]} - Click two points to draw the red-light line (deeper than the stop line)")
         elif key == ord("3"):
             mode = "lane_boundary"
             current_points.clear()
@@ -226,6 +274,7 @@ def main():
         elif key == ord("c"):
             light_roi = None
             stop_line_points = []
+            red_light_line_points = []
             lane_lines = []
             current_points.clear()
             print("\n[CLEARED] All calibration reset.")
